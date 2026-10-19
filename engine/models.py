@@ -1,10 +1,11 @@
 """Resolve a chosen model label to what the Agent tool's ``model`` accepts.
 
-The settings dropdown lists model names (``Opus 5.5``, ``Sonnet 5``, …). Those
-labels are mapped to a concrete model id here, preferring Claude Code's live
-model catalog (``<config>/cache/model-catalog/``) so the id is always the exact
-current one. When the catalog is unavailable, or a label is not in it, the
-mapping falls back to the model family so delegation still works.
+The settings dropdown lists model names (``Opus 5.5``, ``Sonnet 5``, …). The
+Agent tool takes a family alias (``opus``, ``sonnet``, ``haiku``), which runs
+the newest model of that family. A label naming the newest model of its family,
+by Claude Code's live model catalog (``<config>/cache/model-catalog/``), maps
+to the alias; an older one maps to its concrete model id. When the catalog is
+unavailable, or a label is not in it, the mapping falls back to the family.
 
 The Fable family is never resolved.
 """
@@ -71,13 +72,25 @@ def _family_of(token: str) -> Optional[str]:
     return None
 
 
+def _alias_if_newest(model_id: str, models: List[Dict[str, Any]]) -> str:
+    """The family alias when ``model_id`` is the newest of its family, else the id."""
+    named = [m for m in models if m.get("id") == model_id]
+    family = _family_of(str(named[0].get("name", "")).lower()) if named else None
+    if not family:
+        return model_id
+    candidates = [m for m in models if str(m.get("name", "")).lower().startswith(family)]
+    newest = ([m for m in candidates if m.get("quick_select")] or candidates)[0]
+    return family if newest.get("id") == model_id else model_id
+
+
 def resolve(token: str) -> Optional[str]:
     """Map a dropdown label / alias / id to the Agent tool ``model`` value.
 
     ``main coding agent`` -> ``main`` (inline). A catalog name (``Opus 5.5``), a
-    model id, or a family alias all resolve to a concrete id when the catalog is
-    present. A versioned label with no catalog match falls back to its family
-    alias. Fable and anything unrecognised return ``None``.
+    model id, or a family alias resolve to the family alias when they name the
+    newest model of the family, and to the model id otherwise. A versioned label
+    with no catalog match falls back to its family alias. Fable and anything
+    unrecognised return ``None``.
     """
     if not token:
         return None
@@ -92,21 +105,11 @@ def resolve(token: str) -> Optional[str]:
 
     for model in models:
         if norm == str(model.get("id", "")).lower():
-            return model["id"]
+            return _alias_if_newest(model["id"], models)
     for model in models:
         if squished == re.sub(r"[\s_-]+", "", str(model.get("name", "")).lower()):
-            return model["id"]
+            return _alias_if_newest(model["id"], models)
 
-    family = norm if norm in _FAMILIES else _family_of(norm)
-    if family:
-        candidates = [m for m in models if str(m.get("name", "")).lower().startswith(family)]
-        quick = [m for m in candidates if m.get("quick_select")]
-        if norm in _FAMILIES:
-            # bare family -> latest of that family
-            if quick:
-                return quick[0]["id"]
-            if candidates:
-                return candidates[0]["id"]
-        # versioned label we could not match exactly: fall back to the family
-        return family
-    return None
+    # A bare family is its own alias (the newest model of the family); a
+    # versioned label with no catalog match falls back to its family.
+    return norm if norm in _FAMILIES else _family_of(norm)

@@ -8,14 +8,17 @@ Subcommands, in the order a run uses them:
                      sandbox, apply the crash oracle, and write run.json plus a
                      traces file for any trace the deterministic stage leaves
                      undecided.
+    show-traces      Print those traces compactly for the trace judge.
     finalize         Merge the trace-judge verdicts into run.json, aggregate the
-                     signal, and write the Markdown report.
+                     signal, and with --out write the Markdown report.
     session          Read or write the per-session execution-mode marker.
     config           Print the effective configuration.
     version          Print the engine version.
 
 The coding agent runs these around its own two jobs -- proposing probes and
-judging the undecided traces -- as described in the skill instructions.
+judging the undecided traces -- as described in the skill instructions. Each
+run command prints a summary whose first line names the FALCON stage it ran
+(see ``display.py``).
 """
 
 from __future__ import annotations
@@ -31,7 +34,7 @@ from typing import Any, Dict, List, Optional
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from engine import __version__, config as config_mod  # noqa: E402
-from engine import faithfulness, models as models_mod, report, runner, targets as targets_mod, verifier  # noqa: E402
+from engine import display, faithfulness, models as models_mod, report, runner, targets as targets_mod, verifier  # noqa: E402
 
 STDOUT_EXCERPT = 1500
 
@@ -39,9 +42,9 @@ STDOUT_EXCERPT = 1500
 # --------------------------------------------------------------------------- #
 # helpers
 # --------------------------------------------------------------------------- #
-def _progress(message: str) -> None:
-    sys.stderr.write("[attacker-verifier] %s\n" % message)
-    sys.stderr.flush()
+def _say(text: str) -> None:
+    sys.stdout.write(text if text.endswith("\n") else text + "\n")
+    sys.stdout.flush()
 
 
 def _load_json(path: str) -> Any:
@@ -53,10 +56,6 @@ def _write_json(path: str, data: Any) -> None:
     os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(data, handle, indent=2)
-
-
-def _timestamp() -> str:
-    return datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 
 
 def _repo_name(repo_root: str) -> str:
@@ -87,11 +86,15 @@ def _trace_excerpt(trace: Dict[str, Any]) -> Dict[str, Any]:
 # --------------------------------------------------------------------------- #
 def cmd_select_targets(args: argparse.Namespace) -> int:
     cfg = config_mod.load_config(args.repo, args.config_json)
+    # Run files usually live under .attacker-verifier/runs/; make sure git ignores them
+    # before the agent writes its probes there.
+    runner.ensure_state_dir(os.path.abspath(args.repo))
     found = targets_mod.select_targets(
         args.repo, scope=args.scope, path=args.path, max_targets=cfg["max_targets"]
     )
     for target in found:
         target.pop("source", None)  # keep targets.json small; skill re-reads files
+    skipped = targets_mod.not_attacked(args.repo, scope=args.scope, path=args.path)
     payload = {
         "schema": "attacker-verifier/targets@1",
         "repo_root": os.path.abspath(args.repo),
@@ -101,9 +104,10 @@ def cmd_select_targets(args: argparse.Namespace) -> int:
         "probes_min": cfg["probes_min"],
         "probes_max": cfg["probes_max"],
         "targets": found,
+        "not_attacked": skipped,
     }
     _write_json(args.out, payload)
-    _progress("selected %d target(s) in scope '%s' -> %s" % (len(found), args.scope, args.out))
+    _say(display.targets_block(payload, args.turn))
     return 0
 
 
@@ -152,7 +156,8 @@ def cmd_check(args: argparse.Namespace) -> int:
         lookup["%s::%s" % (target["file"], target["qualname"])] = target
 
     probe_list = probes_doc.get("probes", [])
-    _progress("checking %d probe(s) across %d target(s)" % (len(probe_list), len(lookup) or len(targets_doc.get("targets", []))))
+    probed_targets = {str(p.get("target", "")).strip() for p in probe_list}
+    _say(display.check_header(len(probe_list), len(probed_targets), args.turn))
 
     traces_dir = args.traces_dir or os.path.join(os.path.dirname(os.path.abspath(args.out)), "traces")
     os.makedirs(traces_dir, exist_ok=True)
@@ -177,6 +182,7 @@ def cmd_check(args: argparse.Namespace) -> int:
                           faithfulness={"stage": "runtime", "rule": "target_not_inferred",
                                         "detail": "probe names no resolvable target: %r" % target_str})
             results.append(record)
+            _say(display.probe_line(record))
             continue
 
         script = probe.get("script", "")
@@ -192,7 +198,7 @@ def cmd_check(args: argparse.Namespace) -> int:
             record.update(status="rejected_static",
                           faithfulness={"stage": "static", "rule": fstat["rule"], "detail": fstat["detail"]})
             results.append(record)
-            _progress("  %s: rejected before running (%s)" % (probe_id, fstat["rule"]))
+            _say(display.probe_line(record))
             continue
 
         target_file_abs = os.path.join(repo_root, target["file"])
@@ -204,7 +210,7 @@ def cmd_check(args: argparse.Namespace) -> int:
             record.update(status="inconclusive",
                           faithfulness={"stage": "runtime", "rule": fatt["rule"], "detail": fatt["detail"]})
             results.append(record)
-            _progress("  %s: inconclusive (%s)" % (probe_id, fatt["rule"]))
+            _say(display.probe_line(record))
             continue
 
         core = verifier.core_verdict(trace)
@@ -213,15 +219,13 @@ def cmd_check(args: argparse.Namespace) -> int:
                       core=core, trace_excerpt=excerpt)
         results.append(record)
 
-        if core["verdict"] == verifier.INSECURE:
-            _progress("  %s: INSECURE (stage 1 crash oracle)" % probe_id)
-        else:
+        if core["verdict"] != verifier.INSECURE:
             trace_path = os.path.join(traces_dir, "%s.json" % _safe_name(probe_id))
             _write_json(trace_path, excerpt)
             uncertain.append({"id": probe_id, "target": record["target"],
                               "cwe": probe.get("cwe"), "rationale": probe.get("rationale"),
                               "trace": excerpt})
-            _progress("  %s: admitted, needs trace judge" % probe_id)
+        _say(display.probe_line(record))
 
     run = {
         "schema": "attacker-verifier/run@1",
@@ -234,6 +238,7 @@ def cmd_check(args: argparse.Namespace) -> int:
         "config": _safe_config(cfg),
         "generated_at": datetime.datetime.now().isoformat(timespec="seconds"),
         "targets": targets_doc.get("targets", []),
+        "not_attacked": targets_doc.get("not_attacked", []),
         "results": results,
     }
     _write_json(args.out, run)
@@ -247,10 +252,7 @@ def cmd_check(args: argparse.Namespace) -> int:
     }
     _write_json(args.traces_out, judge_doc)
 
-    admitted = sum(1 for r in results if r["status"] == "admitted")
-    stage1 = sum(1 for r in results if r.get("core", {}).get("verdict") == verifier.INSECURE)
-    _progress("done: %d admitted, %d insecure by crash oracle, %d awaiting trace judge -> %s"
-              % (admitted, stage1, len(uncertain), args.traces_out))
+    _say("\n".join(display.check_summary(results, len(uncertain))))
     return 0
 
 
@@ -272,6 +274,10 @@ def cmd_finalize(args: argparse.Namespace) -> int:
 
     results = run.get("results", [])
     by_target: Dict[str, List[Dict[str, Any]]] = {}
+    # Every selected target is reported; one the attacker wrote no probe for
+    # has no evidence.
+    for target in run.get("targets", []):
+        by_target.setdefault("%s::%s" % (target.get("file"), target.get("qualname")), [])
     for record in results:
         key = "%s::%s" % (record["target"].get("file"), record["target"].get("qualname"))
         by_target.setdefault(key, []).append(record)
@@ -320,7 +326,8 @@ def cmd_finalize(args: argparse.Namespace) -> int:
                 if record.get("trace_excerpt") else "",
             })
 
-    per_target.sort(key=lambda r: (r["signal"] != "insecure", r["file"], r["qualname"]))
+    rank = {verifier.INSECURE: 0, verifier.SECURE: 1}
+    per_target.sort(key=lambda r: (rank.get(r["signal"], 2), r["file"], r["qualname"]))
     findings.sort(key=lambda f: (f.get("stage") or 9, f["target"].get("file", "")))
 
     stats = {
@@ -352,7 +359,8 @@ def cmd_finalize(args: argparse.Namespace) -> int:
             "scope_label": scope_label,
             "execution_label": execution_label,
             "tool_version": run.get("tool_version", __version__),
-            "skipped_languages": args.skipped.split(",") if args.skipped else [],
+            "skipped_languages": args.skipped.split(",") if args.skipped else [
+                "%s (not Python)" % rel for rel in run.get("not_attacked", [])],
         },
         "stats": stats,
         "findings": findings,
@@ -360,18 +368,19 @@ def cmd_finalize(args: argparse.Namespace) -> int:
         "config_json": json.dumps(run.get("config", {}), indent=2),
     }
 
-    text = report.render_markdown(final)
-    repo_name = _repo_name(run.get("repo_root", "."))
-    out_path = args.out or os.path.join(
-        run.get("repo_root", "."), "%s_%s.md" % (_safe_name(repo_name), _timestamp())
-    )
-    with open(out_path, "w", encoding="utf-8") as handle:
-        handle.write(text)
+    # The Markdown report is written only when asked for (--out): the repair loop
+    # of /secure-code-generation finalizes every turn and reads final.json.
+    out_path = args.out
+    if args.report_dir:
+        out_path = os.path.join(args.report_dir, "%s_%s.md" % (
+            _safe_name(final["meta"]["repo_name"]), datetime.datetime.now().strftime("%Y%m%d-%H%M%S")))
+    if out_path:
+        with open(out_path, "w", encoding="utf-8") as handle:
+            handle.write(report.render_markdown(final))
     if args.final_out:
         _write_json(args.final_out, final)
 
-    _progress("verdict: %s · %d finding(s) · report -> %s" % (overall.upper(), len(findings), out_path))
-    print(out_path)
+    _say(display.final_block(final, args.turn, out_path))
     return 0
 
 
@@ -381,13 +390,27 @@ def cmd_finalize(args: argparse.Namespace) -> int:
 def cmd_session(args: argparse.Namespace) -> int:
     marker = os.path.join(args.data_dir, "sessions", "%s.json" % _safe_name(args.session_id))
     if args.set_json is not None:
-        _write_json(marker, json.loads(args.set_json))
-        _progress("recorded execution mode for session %s" % args.session_id)
+        execution = json.loads(args.set_json)
+        _write_json(marker, execution)
+        _say("FALCON sandbox: probes run %s for the rest of this session" % _where(execution))
         return 0
     if os.path.isfile(marker):
-        print(json.dumps(_load_json(marker)))
+        execution = _load_json(marker)
+        _say("FALCON sandbox: probes run %s (chosen earlier in this session)" % _where(execution))
+        _say(json.dumps(execution))
         return 0
-    print("")  # empty => not configured yet
+    _say("FALCON sandbox: not chosen yet for this session")
+    return 0
+
+
+def _where(execution: Dict[str, Any]) -> str:
+    if execution.get("mode") == "docker":
+        return "in docker (%s)" % (execution.get("image") or execution.get("container") or "?")
+    return "on the host"
+
+
+def cmd_show_traces(args: argparse.Namespace) -> int:
+    _say(display.traces_block(_load_json(args.traces).get("traces", []), args.turn))
     return 0
 
 
@@ -427,6 +450,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     common_repo = {"default": ".", "help": "repository root (default: current dir)"}
     common_cfg = {"default": None, "help": "inline JSON config override"}
+    common_turn = {"default": None, "metavar": "T/N",
+                   "help": "repair turn shown in the output, e.g. 1/2 (display only)"}
 
     p = sub.add_parser("select-targets", help="rank attack targets in a scope")
     p.add_argument("--repo", **common_repo)
@@ -434,6 +459,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--path", default=None, help="file or directory for --scope path")
     p.add_argument("--out", required=True, help="where to write targets.json")
     p.add_argument("--config-json", **common_cfg)
+    p.add_argument("--turn", **common_turn)
     p.set_defaults(func=cmd_select_targets)
 
     p = sub.add_parser("check", help="screen, run, and crash-check probes")
@@ -444,16 +470,24 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--traces-out", required=True, help="where to write the trace-judge input")
     p.add_argument("--traces-dir", default=None, help="directory for individual trace files")
     p.add_argument("--config-json", **common_cfg)
+    p.add_argument("--turn", **common_turn)
     p.set_defaults(func=cmd_check)
 
     p = sub.add_parser("finalize", help="merge judge verdicts and write the report")
     p.add_argument("--repo", **common_repo)
     p.add_argument("--run", required=True, help="run.json from check")
     p.add_argument("--verdicts", default=None, help="trace-judge verdicts JSON (optional)")
-    p.add_argument("--out", default=None, help="report path (default: <repo>_<ts>.md)")
+    p.add_argument("--out", default=None, help="write the Markdown report here (none if omitted)")
+    p.add_argument("--report-dir", default=None, help="write the report as <dir>/<repo>_<timestamp>.md")
     p.add_argument("--final-out", default=None, help="also write the finalised run JSON here")
     p.add_argument("--skipped", default=None, help="comma-separated 'not attacked' notes")
+    p.add_argument("--turn", **common_turn)
     p.set_defaults(func=cmd_finalize)
+
+    p = sub.add_parser("show-traces", help="print the undecided traces for the trace judge")
+    p.add_argument("--traces", required=True, help="traces.json from check")
+    p.add_argument("--turn", **common_turn)
+    p.set_defaults(func=cmd_show_traces)
 
     p = sub.add_parser("session", help="read or write the per-session execution marker")
     p.add_argument("--data-dir", required=True)

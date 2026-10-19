@@ -28,3 +28,6 @@ venv/
 # OS / editor
 .DS_Store
 *.swp
+
+# Type declarations Claude Code writes beside a plugin loaded with --plugin-dir
+.claude-plugin/types/

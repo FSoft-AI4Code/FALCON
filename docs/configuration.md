@@ -41,8 +41,10 @@ on `main coding agent` and set your session model with Claude Code's own
 
 Any other choice is a model name (`Opus 5.5`, `Opus 5`, `Sonnet 5.5`, …) and
 runs the role on the dedicated subagent at that model. At run time the plugin
-maps the name to the current model id from Claude Code's model catalog
-(`engine/cli.py resolve-model "<name>"`).
+maps the name to what the Agent tool takes (`engine/cli.py resolve-model
+"<name>"`): the family alias (`opus`, `sonnet`, `haiku`) when the name is the
+newest model of its family in Claude Code's model catalog, and the model id
+otherwise.
 
 The names in the dropdown are a fixed list in the plugin manifest, because a
 settings dropdown cannot read Claude Code's model list. A newly released model

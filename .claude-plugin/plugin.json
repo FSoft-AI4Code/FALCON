@@ -2,14 +2,14 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin.json",
   "name": "attacker-verifier",
   "displayName": "Attacker-Verifier",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Checks code for security vulnerabilities by attacking it: an attacker writes proof-of-concept probes, unfaithful probes are discarded, and a verifier judges the sandboxed execution traces.",
   "author": {
     "name": "SafeCodeAgent",
     "url": "https://github.com/SafeCodeAgent"
   },
-  "homepage": "https://github.com/SafeCodeAgent/FALCON",
-  "repository": "https://github.com/SafeCodeAgent/FALCON",
+  "homepage": "https://github.com/FSoft-AI4Code/FALCON",
+  "repository": "https://github.com/FSoft-AI4Code/FALCON",
   "license": "MIT",
   "keywords": [
     "security",
@@ -20,6 +20,7 @@
     "sandbox",
     "code-review"
   ],
+  "types": "./hooks/falcon-state.d.ts",
   "userConfig": {
     "attacker": {
       "type": "string",

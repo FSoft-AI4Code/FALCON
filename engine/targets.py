@@ -58,7 +58,7 @@ def select_targets(
     if scope == "changed":
         files, changed_lines = _changed_files(repo_root)
     elif scope == "path":
-        files, changed_lines = _files_under(repo_root, path or repo_root), None
+        files, changed_lines = _files_under(repo_root, _scope_start(repo_root, path)), None
     else:
         files, changed_lines = _files_under(repo_root, repo_root), None
 
@@ -71,6 +71,43 @@ def select_targets(
 
     targets.sort(key=lambda t: (t["score"], t["_size"]), reverse=True)
     return targets[:max_targets]
+
+
+# Source files in other languages. They are listed as not attacked.
+_OTHER_SOURCE = {
+    ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".go", ".java", ".kt", ".scala", ".c", ".h", ".cc",
+    ".cpp", ".hpp", ".cs", ".rb", ".php", ".rs", ".swift", ".sh",
+}
+
+
+def not_attacked(repo_root: str, scope: str = "whole", path: Optional[str] = None) -> List[str]:
+    """Non-Python source files in the scope, relative to the repository root."""
+    repo_root = os.path.abspath(repo_root)
+    if scope == "changed":
+        names = (_git(repo_root, "diff", "--relative", "--name-only", "HEAD") or "").splitlines()
+        names += (_git(repo_root, "ls-files", "--others", "--exclude-standard") or "").splitlines()
+        candidates = [os.path.join(repo_root, name.strip()) for name in names if name.strip()]
+    else:
+        start = _scope_start(repo_root, path) if scope == "path" else repo_root
+        candidates = [start] if os.path.isfile(start) else []
+        for dirpath, dirnames, filenames in os.walk(start) if os.path.isdir(start) else []:
+            dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
+            candidates.extend(os.path.join(dirpath, name) for name in filenames)
+    found = set()
+    for abspath in candidates:
+        rel = os.path.relpath(abspath, repo_root)
+        if os.path.splitext(rel)[1].lower() in _OTHER_SOURCE and os.path.isfile(abspath) and not _is_test(rel):
+            found.add(rel)
+    return sorted(found)
+
+
+def _scope_start(repo_root: str, path: Optional[str]) -> str:
+    """A --path value, read relative to the repository root when it exists there."""
+    if not path:
+        return repo_root
+    if not os.path.isabs(path) and os.path.exists(os.path.join(repo_root, path)):
+        return os.path.join(repo_root, path)
+    return os.path.abspath(path)
 
 
 def _files_under(repo_root: str, start: str) -> List[str]:
@@ -115,7 +152,9 @@ def _changed_files(repo_root: str) -> Tuple[List[str], Dict[str, Set[int]]]:
 
     has_head = _git(repo_root, "rev-parse", "--verify", "--quiet", "HEAD") is not None
     if has_head:
-        diff = _git(repo_root, "diff", "--unified=0", "HEAD", "--", "*.py") or ""
+        # --relative keeps paths relative to repo_root when it is a subdirectory
+        # of the git work tree, as ls-files below already does.
+        diff = _git(repo_root, "diff", "--relative", "--unified=0", "HEAD", "--", "*.py") or ""
         current: Optional[str] = None
         for line in diff.splitlines():
             if line.startswith("+++ "):
