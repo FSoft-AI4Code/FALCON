@@ -8,7 +8,6 @@
 <h3 align="center">Security feedback for coding agents, grounded in real attacks and their execution traces.</h3>
 
 <p align="center">
-  <a href="#quick-start"><img src="https://img.shields.io/badge/Claude%20Code-plugin-d97757?style=flat" alt="Claude Code plugin"></a>
   <img src="https://img.shields.io/badge/version-0.3.0-1f6feb?style=flat" alt="version 0.3.0">
   <img src="https://img.shields.io/badge/python-3.8%2B-3776ab?style=flat" alt="python 3.8+">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-2ea44f?style=flat" alt="license MIT"></a>
