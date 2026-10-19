@@ -9,13 +9,14 @@
 
 <p align="center">
   <a href="#quick-start"><img src="https://img.shields.io/badge/Claude%20Code-plugin-d97757?style=flat" alt="Claude Code plugin"></a>
-  <img src="https://img.shields.io/badge/version-0.2.0-1f6feb?style=flat" alt="version 0.2.0">
+  <img src="https://img.shields.io/badge/version-0.3.0-1f6feb?style=flat" alt="version 0.3.0">
   <img src="https://img.shields.io/badge/python-3.8%2B-3776ab?style=flat" alt="python 3.8+">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-2ea44f?style=flat" alt="license MIT"></a>
 </p>
 
 <p align="center">
   <a href="#quick-start"><b>Quick start</b></a> ·
+  <a href="img/demo.mp4"><b>Demo video</b></a> ·
   <a href="#how-it-works"><b>How it works</b></a> ·
   <a href="#benchmark-results"><b>Benchmark results</b></a> ·
   <a href="experiments/README.md"><b>Experiments</b></a> ·
@@ -24,8 +25,14 @@
 </p>
 
 <p align="center">
-  <img src="img/overview.png" alt="Overview: the coding agent's patch is attacked with PoC probes, unfaithful probes are rejected, the admitted probes run in a sandbox, and the verifier turns their traces into a verdict and feedback." width="100%">
+  <a href="img/demo.mp4"><img src="img/demo.gif" alt="Demo in Claude Code: asked for a GET /reports/&lt;name&gt; endpoint, Claude writes it on top of an existing helper; the attacker agent's probe reads a file outside the reports folder through a symlink; the verifier judges the trace insecure (CWE-59); Claude fixes the code, and the second turn finds no violation." width="100%"></a>
 </p>
+<p align="center"><sub>
+  <code>/secure-code-generation</code> in Claude Code: Claude writes an endpoint, the attacker agent's probe
+  reads a file outside the reports folder through a symlink, the verifier judges the trace insecure
+  (CWE-59), Claude fixes it, and the second turn finds no violation. Waits are sped up.
+  <a href="img/demo.mp4">MP4 (64 s)</a> · <a href="examples/webapp">demo app</a>
+</sub></p>
 
 ---
 
@@ -48,7 +55,7 @@ tables below come from the paper.
 In Claude Code:
 
 ```
-/plugin marketplace add SafeCodeAgent/FALCON
+/plugin marketplace add FSoft-AI4Code/FALCON
 /plugin install attacker-verifier@attacker-verifier
 ```
 
@@ -75,6 +82,10 @@ A judge that reads source code has to infer how the program behaves, and a model
 that writes security tests also has to decide the correct output. Mistakes in
 either let a candidate pass while keeping the vulnerability. Attacker-Verifier
 splits the job in two and connects the halves through execution:
+
+<p align="center">
+  <img src="img/overview.png" alt="Overview: the coding agent's patch is attacked with PoC probes, unfaithful probes are rejected, the admitted probes run in a sandbox, and the verifier turns their traces into a verdict and feedback." width="100%">
+</p>
 
 1. **Targets.** The changed functions, methods, and classes in non-test files
    are selected (the plugin can also rank a whole repository by
@@ -262,6 +273,23 @@ The report lists each unsafe function with the weakness, the reason, the
 evidence, and a trace excerpt, followed by per-target results and the probes
 the faithfulness check removed.
 
+### What you see while it runs
+
+Each engine step prints a line that names its stage, and the transcript draws
+the engine's commands, the probe file, and the verdict file as those stages
+instead of raw shell commands. In Claude Code 2.1.296 or newer, a band above
+the prompt shows the whole pass, the stage in progress, and who is doing it:
+
+```
+FALCON  secure-code-generation "add GET /reports/<name> …" · turn 1/3 · sandbox: host
+✓ Code ─ ✓ Targets ─ ● Attack ─ ○ Faithfulness ─ ○ Sandbox ─ ○ Verify ─ ○ Feedback
+② Attack  attacker · sonnet subagent    implemented · 2 targets
+```
+
+When the pass ends, the band shows the verdict, one line per unsafe target, and
+the report path, until the next prompt. The band is drawn by the plugin's hooks
+module (`hooks/falcon.tsx`); without it, the stage lines are still printed.
+
 ### Sandbox
 
 The first time either command runs in a session, it asks how to run probes:
@@ -285,8 +313,9 @@ attacker-verifier, then Configure), or for one run with arguments:
 | Repair rounds (`/secure-code-generation`) | 2 | `--turns N` |
 | Max targets per run | 20 | `--max-targets N` |
 
-`main coding agent` runs the role in your current session; a model name runs it
-as a subagent on that model. A repository can pin engine settings in
+`main coding agent` runs the role in your current session; a model name, even
+your session's own model, runs it as a separate subagent on that model, as the
+demo does. A repository can pin engine settings in
 `.attacker-verifier/config.json`. [docs/configuration.md](docs/configuration.md)
 lists everything.
 
@@ -297,6 +326,9 @@ lists everything.
 - A secure result means the probes that ran found nothing, not that the code is
   proven safe. A larger probe budget or a wider scope checks more.
 - Running code takes longer than reading it.
+- Probes are exploit code by design. A model's safety checks can stop the
+  attacker partway; the targets it did not cover then have no evidence rather
+  than a verdict.
 
 ## Reproducing the experiments
 
@@ -316,11 +348,13 @@ tests run only in the separate grading commands. See
 .claude-plugin/   plugin and marketplace manifests
 skills/           /check-code-security and /secure-code-generation
 agents/           attacker and verifier subagents
+hooks/            the stage band and transcript rows shown in Claude Code
 engine/           target selection, faithfulness checks, sandbox, crash oracle, report
 docs/             procedures, configuration reference, sample report
 tests/            engine tests (python3 -m pytest tests)
+examples/webapp/  the app used in the demo video
 experiments/      code for the paper's experiments
-img/              logo and figures
+img/              logo, figures, and the demo video
 ```
 
 ## License
