@@ -30,19 +30,10 @@
 <p align="center"><sub>
   <code>/secure-code-generation</code> in Claude Code: Claude writes an endpoint, the attacker agent's probe
   reads a file outside the reports folder through a symlink, the verifier judges the trace insecure
-  (CWE-59), Claude fixes it, and the second turn finds no violation. Waits are sped up.
-  <a href="img/demo.mp4">MP4 (64 s)</a> · <a href="examples/webapp">demo app</a>
+  (CWE-59), Claude fixes it, and the second turn finds no violation.
 </sub></p>
 
 ---
-
-Attacker-Verifier checks code by attacking it. An attacker writes small
-proof-of-concept probes that call the code with adversarial inputs and never say
-what the output should be. Probes that fake their evidence are thrown out; the
-rest run in a sandbox, and a verifier decides from each execution trace whether
-the code did something unsafe. A reported violation always comes with the probe
-and the trace that show it, so a coding agent can fix the cause instead of
-guessing.
 
 The method is **FALCON**, from the paper *Secure Agentic Coding through
 Counterexample-Grounded Feedback*. This repository has FALCON as a
