@@ -21,7 +21,7 @@
   <a href="experiments/README.md"><b>Experiments</b></a> ·
   <a href="docs/configuration.md"><b>Configuration</b></a> ·
   <a href="https://falcon-secure.github.io/"><b>Project page</b></a> ·
-  <a href="paper/Attacker_Verifier.pdf"><b>Paper</b></a>
+  <a href="https://arxiv.org/abs/2610.25916"><b>Paper</b></a>
 </p>
 
 <p align="center">
